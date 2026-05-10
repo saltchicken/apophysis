@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apophysis"
+version = "0.1.0"
+description = "GPU-accelerated Apophysis .flame fractal renderer using Taichi"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Apophysis Renderer Developer"}
+]
+dependencies = [
+    "taichi",
+    "numpy",
+    "Pillow"
+]
+
+[project.scripts]
+apophysis = "apophysis.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/apophysis"
+
+[tool.setuptools.packages.find]
+where = ["src"]
