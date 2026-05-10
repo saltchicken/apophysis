@@ -43,7 +43,24 @@ XFormStruct = ti.types.struct(
     v_disc=ti.f32,
     v_spiral=ti.f32,
     v_hyperbolic=ti.f32,
-    v_diamond=ti.f32
+    v_diamond=ti.f32,
+    v_ex=ti.f32,
+    v_julia=ti.f32,
+    v_bent=ti.f32,
+    v_waves=ti.f32,
+    v_fisheye=ti.f32,
+    v_popcorn=ti.f32,
+    v_exponential=ti.f32,
+    v_power=ti.f32,
+    v_cosine=ti.f32,
+    v_rings=ti.f32,
+    v_fan=ti.f32,
+    v_eyefish=ti.f32,
+    v_bubble=ti.f32,
+    v_cylinder=ti.f32,
+    v_noise=ti.f32,
+    v_blur=ti.f32,
+    v_gaussian_blur=ti.f32
 )
 
 # Accumulator holds R, G, B, and Density (Hit Count) for every pixel
@@ -164,6 +181,141 @@ def render_flame_kernel(
             if xf.v_diamond > 0.0:
                 final_x += xf.v_diamond * ti.math.sin(theta) * ti.math.cos(r)
                 final_y += xf.v_diamond * ti.math.cos(theta) * ti.math.sin(r)
+                
+            # Ex
+            if xf.v_ex > 0.0:
+                n0 = ti.math.sin(theta + r)
+                n1 = ti.math.cos(theta - r)
+                m0 = n0 * n0 * n0
+                m1 = n1 * n1 * n1
+                final_x += xf.v_ex * r * (m0 + m1)
+                final_y += xf.v_ex * r * (m0 - m1)
+                
+            # Julia
+            if xf.v_julia > 0.0:
+                r_julia = ti.math.sqrt(r)
+                theta_julia = theta * 0.5 + ti.math.pi * (ti.random(ti.i32) % 2)
+                final_x += xf.v_julia * r_julia * ti.math.cos(theta_julia)
+                final_y += xf.v_julia * r_julia * ti.math.sin(theta_julia)
+                
+            # Bent
+            if xf.v_bent > 0.0:
+                bent_x = nx
+                bent_y = ny
+                if nx >= 0.0 and ny >= 0.0:
+                    pass
+                elif nx < 0.0 and ny >= 0.0:
+                    bent_x = 2.0 * nx
+                elif nx >= 0.0 and ny < 0.0:
+                    bent_y = ny * 0.5
+                else:
+                    bent_x = 2.0 * nx
+                    bent_y = ny * 0.5
+                final_x += xf.v_bent * bent_x
+                final_y += xf.v_bent * bent_y
+
+            # Waves
+            if xf.v_waves > 0.0:
+                # Standard parameters for waves
+                dx = nx + xf.b * ti.math.sin(ny / (xf.c * xf.c + 1e-10))
+                dy = ny + xf.e * ti.math.sin(nx / (xf.f * xf.f + 1e-10))
+                final_x += xf.v_waves * dx
+                final_y += xf.v_waves * dy
+                
+            # Fisheye
+            if xf.v_fisheye > 0.0:
+                r_fisheye = 2.0 / (r + 1.0)
+                final_x += xf.v_fisheye * r_fisheye * ny
+                final_y += xf.v_fisheye * r_fisheye * nx
+
+            # Popcorn
+            if xf.v_popcorn > 0.0:
+                dx = nx + xf.c * ti.math.sin(ti.math.tan(3.0 * ny))
+                dy = ny + xf.f * ti.math.sin(ti.math.tan(3.0 * nx))
+                final_x += xf.v_popcorn * dx
+                final_y += xf.v_popcorn * dy
+
+            # Exponential
+            if xf.v_exponential > 0.0:
+                exp_nx = ti.math.exp(nx - 1.0)
+                final_x += xf.v_exponential * exp_nx * ti.math.cos(ti.math.pi * ny)
+                final_y += xf.v_exponential * exp_nx * ti.math.sin(ti.math.pi * ny)
+
+            # Power
+            if xf.v_power > 0.0:
+                r_safe = ti.math.max(r, 1e-10)
+                pow_theta = ti.math.pow(r_safe, ti.math.sin(theta))
+                final_x += xf.v_power * pow_theta * ti.math.cos(theta)
+                final_y += xf.v_power * pow_theta * ti.math.sin(theta)
+
+            # Cosine
+            if xf.v_cosine > 0.0:
+                exp_ny = ti.math.exp(ny)
+                exp_neg_ny = ti.math.exp(-ny)
+                cosh_ny = 0.5 * (exp_ny + exp_neg_ny)
+                sinh_ny = 0.5 * (exp_ny - exp_neg_ny)
+                final_x += xf.v_cosine * ti.math.cos(ti.math.pi * nx) * cosh_ny
+                final_y += xf.v_cosine * -ti.math.sin(ti.math.pi * nx) * sinh_ny
+
+            # Rings
+            if xf.v_rings > 0.0:
+                dx = xf.c * xf.c + 1e-10
+                r_rings = ((r + dx) % (2.0 * dx)) - dx + r * (1.0 - dx)
+                final_x += xf.v_rings * r_rings * ti.math.cos(theta)
+                final_y += xf.v_rings * r_rings * ti.math.sin(theta)
+
+            # Fan
+            if xf.v_fan > 0.0:
+                dx = ti.math.pi * (xf.c * xf.c + 1e-10)
+                dx2 = dx * 0.5
+                t = theta + xf.f - ti.math.floor((theta + xf.f) / dx) * dx
+                if t > dx2:
+                    final_x += xf.v_fan * r * ti.math.cos(theta - dx2)
+                    final_y += xf.v_fan * r * ti.math.sin(theta - dx2)
+                else:
+                    final_x += xf.v_fan * r * ti.math.cos(theta + dx2)
+                    final_y += xf.v_fan * r * ti.math.sin(theta + dx2)
+
+            # Eyefish
+            if xf.v_eyefish > 0.0:
+                r_eyefish = 2.0 / (r + 1.0)
+                final_x += xf.v_eyefish * r_eyefish * nx
+                final_y += xf.v_eyefish * r_eyefish * ny
+
+            # Bubble
+            if xf.v_bubble > 0.0:
+                r_bubble = 4.0 / (r2 + 4.0)
+                final_x += xf.v_bubble * r_bubble * nx
+                final_y += xf.v_bubble * r_bubble * ny
+
+            # Cylinder
+            if xf.v_cylinder > 0.0:
+                final_x += xf.v_cylinder * ti.math.sin(nx)
+                final_y += xf.v_cylinder * ny
+
+            # Noise
+            if xf.v_noise > 0.0:
+                rx = ti.random(ti.f32)
+                ry = ti.random(ti.f32) * 2.0 * ti.math.pi
+                final_x += xf.v_noise * rx * nx * ti.math.cos(ry)
+                final_y += xf.v_noise * rx * ny * ti.math.sin(ry)
+
+            # Blur
+            if xf.v_blur > 0.0:
+                blur_r = ti.random(ti.f32)
+                blur_theta = ti.random(ti.f32) * 2.0 * ti.math.pi
+                final_x += xf.v_blur * blur_r * ti.math.cos(blur_theta)
+                final_y += xf.v_blur * blur_r * ti.math.sin(blur_theta)
+
+            # Gaussian Blur
+            if xf.v_gaussian_blur > 0.0:
+                # Box-Muller transform for normal distribution
+                u1 = ti.math.max(ti.random(ti.f32), 1e-10)
+                u2 = ti.random(ti.f32)
+                z0 = ti.math.sqrt(-2.0 * ti.math.log(u1)) * ti.math.cos(2.0 * ti.math.pi * u2)
+                z1 = ti.math.sqrt(-2.0 * ti.math.log(u1)) * ti.math.sin(2.0 * ti.math.pi * u2)
+                final_x += xf.v_gaussian_blur * z0
+                final_y += xf.v_gaussian_blur * z1
 
             # Update coordinates for the next iteration
             x = final_x
@@ -253,11 +405,14 @@ class ApophysisRenderer:
         self.palette_data = []
         self.camera = {"scale": 100.0, "x": 0.0, "y": 0.0}
         
-        # Supported variations list
+        # Supported variations list (Updated with 7X additions)
         self.supported_vars = [
             "linear", "sinusoidal", "spherical", "swirl", "horseshoe", 
             "polar", "handkerchief", "heart", "disc", "spiral", 
-            "hyperbolic", "diamond"
+            "hyperbolic", "diamond", "ex", "julia", "bent", "waves", 
+            "fisheye", "popcorn", "exponential", "power", "cosine", 
+            "rings", "fan", "eyefish", "bubble", "cylinder", "noise", 
+            "blur", "gaussian_blur"
         ]
         
     def parse_flame(self):
