@@ -16,50 +16,38 @@ OVERSAMPLE = 2             # Renders at 2x resolution (4K) then downscales for a
 WIDTH = FINAL_WIDTH * OVERSAMPLE
 HEIGHT = FINAL_HEIGHT * OVERSAMPLE
 NUM_THREADS = 200_000      # Number of parallel GPU threads
-ITERATIONS = 50_000        # INCREASED: 10 Billion total points for true smoothness
+ITERATIONS = 50_000        # 10 Billion total points for true smoothness
 BURN_IN = 50               # Number of initial iterations to skip (letting the math settle)
 GAMMA = 2.2                # Gamma correction for final image
 BRIGHTNESS = 2.0           # Global brightness multiplier
 VIBRANCE = 1.4             # Saturation boost for dense areas
 BLOOM_INTENSITY = 0.4      # How much the bright areas glow (0.0 to 1.0)
-NOISE_FALLOFF = 1.5        # NEW: Exponential curve to smoothly fade out stray grain
+
+# --- ADVANCED NOISE REDUCTION SETTINGS ---
+# Ignore pixels with fewer hits than this. This is the ultimate "dot killer",
+# immediately deleting stray mathematical paths that don't form part of a dense design.
+MIN_DENSITY = 12.0         
+NOISE_FALLOFF = 2.5        # Increased from 1.5. Exponential curve to sharply drop off sparse edges.
+
+# Filter Settings for Density Estimation (Splatting)
+FILTER_RADIUS = 1          # 1 = 3x3 kernel. Higher is smoother but slightly slower/blurrier.
+FILTER_WEIGHT_CENTER = 1.0 # Weight of the actual hit pixel
+FILTER_WEIGHT_EDGE = 0.5   # Weight of the neighboring pixels
 
 # Data structure mapping to hold our Affine Transforms and Variation weights in VRAM
-# Taichi structs ensure memory alignment on the GPU
 XFormStruct = ti.types.struct(
     a=ti.f32, b=ti.f32, c=ti.f32, d=ti.f32, e=ti.f32, f=ti.f32, # Affine matrix
     weight=ti.f32,     # Probability of selection
     color_idx=ti.f32,  # Target color coordinate (0.0 to 1.0)
     
     # Variations (The mathematical deformations)
-    v_linear=ti.f32,
-    v_sinusoidal=ti.f32,
-    v_spherical=ti.f32,
-    v_swirl=ti.f32,
-    v_horseshoe=ti.f32,
-    v_polar=ti.f32,
-    v_handkerchief=ti.f32,
-    v_heart=ti.f32,
-    v_disc=ti.f32,
-    v_spiral=ti.f32,
-    v_hyperbolic=ti.f32,
-    v_diamond=ti.f32,
-    v_ex=ti.f32,
-    v_julia=ti.f32,
-    v_bent=ti.f32,
-    v_waves=ti.f32,
-    v_fisheye=ti.f32,
-    v_popcorn=ti.f32,
-    v_exponential=ti.f32,
-    v_power=ti.f32,
-    v_cosine=ti.f32,
-    v_rings=ti.f32,
-    v_fan=ti.f32,
-    v_eyefish=ti.f32,
-    v_bubble=ti.f32,
-    v_cylinder=ti.f32,
-    v_noise=ti.f32,
-    v_blur=ti.f32,
+    v_linear=ti.f32, v_sinusoidal=ti.f32, v_spherical=ti.f32, v_swirl=ti.f32,
+    v_horseshoe=ti.f32, v_polar=ti.f32, v_handkerchief=ti.f32, v_heart=ti.f32,
+    v_disc=ti.f32, v_spiral=ti.f32, v_hyperbolic=ti.f32, v_diamond=ti.f32,
+    v_ex=ti.f32, v_julia=ti.f32, v_bent=ti.f32, v_waves=ti.f32,
+    v_fisheye=ti.f32, v_popcorn=ti.f32, v_exponential=ti.f32, v_power=ti.f32,
+    v_cosine=ti.f32, v_rings=ti.f32, v_fan=ti.f32, v_eyefish=ti.f32,
+    v_bubble=ti.f32, v_cylinder=ti.f32, v_noise=ti.f32, v_blur=ti.f32,
     v_gaussian_blur=ti.f32
 )
 
@@ -81,7 +69,7 @@ def render_flame_kernel(
     cam_x: ti.f32, 
     cam_y: ti.f32
 ):
-    # This loop runs massively in parallel on your RTX 4090
+    # This loop runs massively in parallel on your GPU
     for thread_id in range(NUM_THREADS):
         # Initialize a random starting point and color coordinate
         x = ti.random(ti.f32) * 2.0 - 1.0
@@ -216,7 +204,6 @@ def render_flame_kernel(
 
             # Waves
             if xf.v_waves > 0.0:
-                # Standard parameters for waves
                 dx = nx + xf.b * ti.math.sin(ny / (xf.c * xf.c + 1e-10))
                 dy = ny + xf.e * ti.math.sin(nx / (xf.f * xf.f + 1e-10))
                 final_x += xf.v_waves * dx
@@ -333,25 +320,38 @@ def render_flame_kernel(
                 px = ti.cast(px_float, ti.i32)
                 py = ti.cast(py_float, ti.i32)
                 
-                # If point is on screen, map color from palette and accumulate
-                if 0 <= px < WIDTH and 0 <= py < HEIGHT:
-                    # Look up color in 256-color palette
+                # If point is near screen, look up color
+                if -FILTER_RADIUS <= px < WIDTH + FILTER_RADIUS and -FILTER_RADIUS <= py < HEIGHT + FILTER_RADIUS:
+                    
                     pal_idx = ti.cast(c * 255.0, ti.i32)
                     pal_idx = ti.math.clamp(pal_idx, 0, 255)
                     color = palette[pal_idx]
                     
-                    # ATOMIC ADDITION: Safely update VRAM even with 100k threads hitting it
-                    # Accumulator vector is [R, G, B, Density]
-                    ti.atomic_add(accumulator[px, py][0], color[0])
-                    ti.atomic_add(accumulator[px, py][1], color[1])
-                    ti.atomic_add(accumulator[px, py][2], color[2])
-                    ti.atomic_add(accumulator[px, py][3], 1.0) # Increment hit count
+                    # DENSITY ESTIMATION (Splatting)
+                    for dx in range(-FILTER_RADIUS, FILTER_RADIUS + 1):
+                        for dy in range(-FILTER_RADIUS, FILTER_RADIUS + 1):
+                            
+                            splat_x = px + dx
+                            splat_y = py + dy
+                            
+                            if 0 <= splat_x < WIDTH and 0 <= splat_y < HEIGHT:
+                                dist2 = dx*dx + dy*dy
+                                
+                                weight = 0.0
+                                if dist2 == 0:
+                                    weight = FILTER_WEIGHT_CENTER
+                                elif dist2 <= FILTER_RADIUS * FILTER_RADIUS:
+                                    weight = FILTER_WEIGHT_EDGE / ti.math.sqrt(float(dist2))
+                                
+                                if weight > 0.0:
+                                    ti.atomic_add(accumulator[splat_x, splat_y][0], color[0] * weight)
+                                    ti.atomic_add(accumulator[splat_x, splat_y][1], color[1] * weight)
+                                    ti.atomic_add(accumulator[splat_x, splat_y][2], color[2] * weight)
+                                    ti.atomic_add(accumulator[splat_x, splat_y][3], weight) # Increment hit count
 
 @ti.kernel
 def find_max_density_kernel():
-    # Reset max density
     max_density[None] = 0.0
-    # Search all pixels for the highest hit count
     for i, j in accumulator:
         ti.atomic_max(max_density[None], accumulator[i, j][3])
 
@@ -359,35 +359,38 @@ def find_max_density_kernel():
 def apply_tone_mapping_kernel():
     # Map the linear accumulation to logarithmic visual space
     max_d = max_density[None]
-    log_max = ti.math.log(max_d)
     
+    # Prevent log of <= 0 by ensuring the input is at least 1.0
+    safe_max = ti.math.max(max_d - MIN_DENSITY + 1.0, 1.0)
+    log_max = ti.math.max(ti.math.log(safe_max), 1e-5)
+    
+    # The struct-for loop MUST be at the outermost scope in Taichi
     for i, j in accumulator:
         dens = accumulator[i, j][3]
-        # Ignore empty space and single rogue hits
-        if dens > 1.0:
-            # 1. Calculate Logarithmic alpha/exposure
-            alpha = ti.math.log(dens) / log_max
+        
+        # --- THE DOT KILLER ---
+        # HARD GATE: If a pixel doesn't meet the MIN_DENSITY, it's discarded completely. 
+        if max_d > MIN_DENSITY and dens >= MIN_DENSITY:
+            # 1. Calculate Logarithmic alpha/exposure 
+            effective_dens = dens - MIN_DENSITY + 1.0
+            alpha = ti.math.max(ti.math.log(effective_dens) / log_max, 0.0)
             
-            # NEW: Soft Noise Gate. By raising the fraction to a power, 
-            # low-density grain drops to black smoothly without a harsh, jagged edge.
+            # 2. Soft Noise Gate (Accelerates the fade-out of low-density areas)
             alpha = ti.math.pow(alpha, NOISE_FALLOFF)
             
-            # 2. Extract base color averages
+            # 3. Extract base color averages
             r = accumulator[i, j][0] / dens
             g = accumulator[i, j][1] / dens
             b = accumulator[i, j][2] / dens
             
-            # 3. HDR Vibrance (Boost saturation before gamma clamping)
-            # Calculate perceived luminance (brightness) of the color
+            # 4. HDR Vibrance (Boost saturation before gamma clamping)
             luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
             
-            # Push the colors away from grayscale to increase purity
             r = luminance + (r - luminance) * VIBRANCE
             g = luminance + (g - luminance) * VIBRANCE
             b = luminance + (b - luminance) * VIBRANCE
             
-            # 4. Apply Brightness, Alpha, and Gamma Correction
-            # ti.math.max is used to prevent negative bases in the pow() function from the vibrance math
+            # 5. Apply Brightness, Alpha, and Gamma Correction
             final_r = ti.math.pow(ti.math.max(r * alpha * BRIGHTNESS, 0.0), 1.0 / GAMMA)
             final_g = ti.math.pow(ti.math.max(g * alpha * BRIGHTNESS, 0.0), 1.0 / GAMMA)
             final_b = ti.math.pow(ti.math.max(b * alpha * BRIGHTNESS, 0.0), 1.0 / GAMMA)
@@ -395,6 +398,7 @@ def apply_tone_mapping_kernel():
             # Clamp to safe 0-1 range
             pixels[i, j] = ti.math.clamp(ti.math.vec3(final_r, final_g, final_b), 0.0, 1.0)
         else:
+            # Pixel is too sparse; force to black
             pixels[i, j] = ti.math.vec3(0.0, 0.0, 0.0)
 
 class ApophysisRenderer:
@@ -405,7 +409,6 @@ class ApophysisRenderer:
         self.palette_data = []
         self.camera = {"scale": 100.0, "x": 0.0, "y": 0.0}
         
-        # Supported variations list (Updated with 7X additions)
         self.supported_vars = [
             "linear", "sinusoidal", "spherical", "swirl", "horseshoe", 
             "polar", "handkerchief", "heart", "disc", "spiral", 
@@ -422,28 +425,21 @@ class ApophysisRenderer:
         flame = root.find('flame')
         
         if flame is None:
-            # Handle case where root IS the flame tag
             flame = root if root.tag == 'flame' else None
             
         if flame is None:
             raise ValueError("Invalid .flame file format.")
 
-        # 1. Parse Camera Settings
         if 'scale' in flame.attrib:
-            # We multiply by OVERSAMPLE to ensure the fractal size stays consistent 
-            # regardless of internal render resolution, and then apply user zoom
             self.camera['scale'] = float(flame.attrib['scale']) * OVERSAMPLE * self.zoom_multiplier
         if 'center' in flame.attrib:
             cx, cy = map(float, flame.attrib['center'].split())
             self.camera['x'] = cx
             self.camera['y'] = cy
 
-        # 2. Parse Palette
         palette_tag = flame.find('palette')
         if palette_tag is not None and palette_tag.text:
-            # Apophysis palette is usually a long string of hex codes
             text = palette_tag.text.replace("\n", "").replace(" ", "").strip()
-            # If it's a solid block of hex codes (RRGGBB)
             for i in range(256):
                 if i*6+6 <= len(text):
                     hex_str = text[i*6 : i*6+6]
@@ -452,15 +448,11 @@ class ApophysisRenderer:
                     b = int(hex_str[4:6], 16) / 255.0
                     self.palette_data.append((r, g, b))
         
-        # Fallback palette if missing
         if len(self.palette_data) < 256:
-            print("Warning: valid palette not found. Generating default heat-map palette.")
             self.palette_data = [(i/255.0, (i/255.0)**2, 0.0) for i in range(256)]
 
-        # 3. Parse XForms (Transforms)
         total_weight = 0.0
         for xform_tag in flame.findall('xform'):
-            # Coefficients: a b c d e f
             coef_str = xform_tag.attrib.get('coefs', '1 0 0 1 0 0')
             coefs = list(map(float, coef_str.split()))
             
@@ -475,13 +467,11 @@ class ApophysisRenderer:
                 'color_idx': color_idx
             }
             
-            # Extract variations dynamically
             for v in self.supported_vars:
                 xf_data[f'v_{v}'] = float(xform_tag.attrib.get(v, 0.0))
                 
             self.xforms.append(xf_data)
             
-        # Normalize weights so they add up to 1.0 (for the GPU probability logic)
         for xf in self.xforms:
             xf['weight'] /= total_weight
             
@@ -490,7 +480,6 @@ class ApophysisRenderer:
     def render(self, output_path="output.png"):
         self.parse_flame()
         
-        # 1. Allocate and fill GPU Fields
         num_xfs = len(self.xforms)
         d_xforms = XFormStruct.field(shape=(num_xfs,))
         d_palette = ti.Vector.field(3, dtype=ti.f32, shape=(256,))
@@ -506,10 +495,8 @@ class ApophysisRenderer:
         for i in range(256):
             d_palette[i] = ti.Vector(self.palette_data[i])
             
-        # Clear accumulators
         accumulator.fill(0)
         
-        # 2. Execute Chaos Game Kernel
         print(f"Executing Compute Shader: {NUM_THREADS} threads * {ITERATIONS} iterations...")
         start_time = time.time()
         
@@ -522,21 +509,17 @@ class ApophysisRenderer:
             cam_y=self.camera['y']
         )
         
-        # Ensure GPU operations are complete
         ti.sync()
         print(f"Compute finished in {time.time() - start_time:.2f} seconds.")
         
-        # 3. Tone Mapping
         print("Applying Log-Density Tone Mapping...")
         find_max_density_kernel()
         apply_tone_mapping_kernel()
         ti.sync()
         
-        # 4. Convert GPU field to Numpy array and save via PIL
-        # Taichi pixel format is (WIDTH, HEIGHT, 3), PIL expects (HEIGHT, WIDTH, 3)
         img_np = pixels.to_numpy()
-        img_np = np.swapaxes(img_np, 0, 1) # Flip axes
-        img_np = img_np[::-1, :, :]        # Flip Y axis (Apophysis/Math coordinates are bottom-up)
+        img_np = np.swapaxes(img_np, 0, 1) 
+        img_np = img_np[::-1, :, :]        
         
         img_uint8 = (img_np * 255.0).astype(np.uint8)
         img = Image.fromarray(img_uint8, 'RGB')
@@ -546,27 +529,29 @@ class ApophysisRenderer:
             print(f"Downscaling from {WIDTH}x{HEIGHT} to {FINAL_WIDTH}x{FINAL_HEIGHT} for Anti-Aliasing...")
             img = img.resize((FINAL_WIDTH, FINAL_HEIGHT), Image.Resampling.LANCZOS)
             
+        # --- SECOND LAYER NOISE REDUCTION ---
+        # A median filter is the perfect mathematical tool for eliminating "salt and pepper" 
+        # noise (stray 1x1 or 2x2 bright pixels) while leaving the sharp structural boundaries perfectly intact.
+        print("Applying Median Filter to eliminate isolated stray dots...")
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+            
         # --- Cinematic Post-Processing Pipeline ---
         print("Applying Cinematic Post-Processing (Bloom & Color Grade)...")
         
         # 1. Optical Bloom (Glow)
-        # Blur a copy of the image based on screen width (1.5% radius)
         blur_radius = FINAL_WIDTH * 0.015
         blurred_img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-        # Screen blend the glowing blur over the original image
         screened_img = ImageChops.screen(img, blurred_img)
-        # Blend original with screened version based on user intensity
         img = Image.blend(img, screened_img, BLOOM_INTENSITY)
         
-        # 2. Final Color Grading (Contrast and Saturation Pop)
-        img = ImageEnhance.Contrast(img).enhance(1.15) # Darken shadows slightly
-        img = ImageEnhance.Color(img).enhance(1.1)   # Give final RGB values a slight punch
+        # 2. Final Color Grading
+        img = ImageEnhance.Contrast(img).enhance(1.15) 
+        img = ImageEnhance.Color(img).enhance(1.1)   
         
         img.save(output_path)
-        print(f"Success! Fractal saved to {output_path}")
+        print(f"Success! Cleaned and polished fractal saved to {output_path}")
 
 def generate_sample_flame(filepath):
-    """Generates a beautiful Apophysis XML file combining Swirl and Spherical math."""
     xml_content = """<flames>
 <flame name="Cosmic_Flower" version="Apophysis 7x" size="1920 1080" center="0 0" scale="250">
     <xform weight="0.5" color="0.0" swirl="0.8" linear="0.2" coefs="0.8 0.3 -0.3 0.8 0 0" />
@@ -574,7 +559,6 @@ def generate_sample_flame(filepath):
     <xform weight="0.5" color="1.0" horseshoe="0.8" coefs="0.3 0.5 -0.5 0.3 -1.0 -0.5" />
     <palette count="256">
 """
-    # Generate a beautiful cyan to purple to orange gradient for the palette
     for i in range(256):
         r = int((math.sin(i * 0.05) * 0.5 + 0.5) * 255)
         g = int((math.sin(i * 0.05 + 2) * 0.5 + 0.5) * 255)
@@ -600,7 +584,6 @@ if __name__ == "__main__":
     output_file = args.output
     zoom_factor = args.zoom
     
-    # If using the default and it doesn't exist, generate the sample
     if not os.path.exists(flame_file) and flame_file == "sample_fractal.flame":
         generate_sample_flame(flame_file)
     elif not os.path.exists(flame_file):
