@@ -1,6 +1,7 @@
 import os
 import math
 import time
+import argparse
 import xml.etree.ElementTree as ET
 import taichi as ti
 import numpy as np
@@ -389,12 +390,20 @@ def generate_sample_flame(filepath):
     print(f"Generated sample flame file at {filepath}")
 
 if __name__ == "__main__":
-    flame_file = "sample_fractal.flame"
-    output_file = "render_output.png"
+    parser = argparse.ArgumentParser(description="Render an Apophysis .flame file using Taichi.")
+    parser.add_argument("-i", "--input", type=str, default="sample_fractal.flame", help="Path to the input .flame file")
+    parser.add_argument("-o", "--output", type=str, default="render_output.png", help="Path to the saved output image")
+    args = parser.parse_args()
     
-    # If the user hasn't provided a flame file, build a gorgeous one for them to test
-    if not os.path.exists(flame_file):
+    flame_file = args.input
+    output_file = args.output
+    
+    # If using the default and it doesn't exist, generate the sample
+    if not os.path.exists(flame_file) and flame_file == "sample_fractal.flame":
         generate_sample_flame(flame_file)
+    elif not os.path.exists(flame_file):
+        print(f"Error: The file '{flame_file}' does not exist.")
+        exit(1)
         
     try:
         renderer = ApophysisRenderer(flame_file)
