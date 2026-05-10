@@ -7,14 +7,16 @@ import taichi as ti
 import numpy as np
 from PIL import Image
 
-# Initialize Taichi to use the highest performance GPU available (CUDA for RTX 4090)
-ti.init(arch=ti.gpu)
+ti.init(arch=ti.cuda)
 
 # Rendering Constants
-WIDTH = 1920
-HEIGHT = 1080
+FINAL_WIDTH = 1920
+FINAL_HEIGHT = 1080
+OVERSAMPLE = 2             # Renders at 2x resolution (4K) then downscales for anti-aliasing
+WIDTH = FINAL_WIDTH * OVERSAMPLE
+HEIGHT = FINAL_HEIGHT * OVERSAMPLE
 NUM_THREADS = 200_000      # Number of parallel GPU threads
-ITERATIONS = 5_000         # Number of chaos game iterations per thread (1 Billion total points)
+ITERATIONS = 25_000        # INCREASED: 5 Billion total points for less grain
 BURN_IN = 50               # Number of initial iterations to skip (letting the math settle)
 GAMMA = 2.2                # Gamma correction for final image
 BRIGHTNESS = 2.0           # Global brightness multiplier
@@ -226,8 +228,9 @@ def apply_tone_mapping_kernel():
             pixels[i, j] = ti.math.vec3(0.0, 0.0, 0.0)
 
 class ApophysisRenderer:
-    def __init__(self, flame_path):
+    def __init__(self, flame_path, zoom_multiplier=1.0):
         self.flame_path = flame_path
+        self.zoom_multiplier = zoom_multiplier
         self.xforms = []
         self.palette_data = []
         self.camera = {"scale": 100.0, "x": 0.0, "y": 0.0}
@@ -254,7 +257,9 @@ class ApophysisRenderer:
 
         # 1. Parse Camera Settings
         if 'scale' in flame.attrib:
-            self.camera['scale'] = float(flame.attrib['scale'])
+            # We multiply by OVERSAMPLE to ensure the fractal size stays consistent 
+            # regardless of internal render resolution, and then apply user zoom
+            self.camera['scale'] = float(flame.attrib['scale']) * OVERSAMPLE * self.zoom_multiplier
         if 'center' in flame.attrib:
             cx, cy = map(float, flame.attrib['center'].split())
             self.camera['x'] = cx
@@ -362,6 +367,12 @@ class ApophysisRenderer:
         
         img_uint8 = (img_np * 255.0).astype(np.uint8)
         img = Image.fromarray(img_uint8, 'RGB')
+        
+        # Apply Supersampling Anti-Aliasing (SSAA) by downscaling
+        if OVERSAMPLE > 1:
+            print(f"Downscaling from {WIDTH}x{HEIGHT} to {FINAL_WIDTH}x{FINAL_HEIGHT} for Anti-Aliasing...")
+            img = img.resize((FINAL_WIDTH, FINAL_HEIGHT), Image.Resampling.LANCZOS)
+            
         img.save(output_path)
         print(f"Success! Fractal saved to {output_path}")
 
@@ -393,10 +404,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Render an Apophysis .flame file using Taichi.")
     parser.add_argument("-i", "--input", type=str, default="sample_fractal.flame", help="Path to the input .flame file")
     parser.add_argument("-o", "--output", type=str, default="render_output.png", help="Path to the saved output image")
+    parser.add_argument("-z", "--zoom", type=float, default=1.0, help="Zoom multiplier (e.g. 0.5 to zoom out, 2.0 to zoom in)")
     args = parser.parse_args()
     
     flame_file = args.input
     output_file = args.output
+    zoom_factor = args.zoom
     
     # If using the default and it doesn't exist, generate the sample
     if not os.path.exists(flame_file) and flame_file == "sample_fractal.flame":
@@ -406,7 +419,7 @@ if __name__ == "__main__":
         exit(1)
         
     try:
-        renderer = ApophysisRenderer(flame_file)
+        renderer = ApophysisRenderer(flame_file, zoom_multiplier=zoom_factor)
         renderer.render(output_file)
     except Exception as e:
         print(f"Error rendering fractal: {e}")
