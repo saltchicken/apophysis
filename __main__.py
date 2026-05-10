@@ -5,21 +5,24 @@ import argparse
 import xml.etree.ElementTree as ET
 import taichi as ti
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter, ImageEnhance, ImageChops
 
 ti.init(arch=ti.cuda)
 
 # Rendering Constants
-FINAL_WIDTH = 1920
-FINAL_HEIGHT = 1080
+FINAL_WIDTH = 5120
+FINAL_HEIGHT = 1440
 OVERSAMPLE = 2             # Renders at 2x resolution (4K) then downscales for anti-aliasing
 WIDTH = FINAL_WIDTH * OVERSAMPLE
 HEIGHT = FINAL_HEIGHT * OVERSAMPLE
 NUM_THREADS = 200_000      # Number of parallel GPU threads
-ITERATIONS = 25_000        # INCREASED: 5 Billion total points for less grain
+ITERATIONS = 50_000        # INCREASED: 10 Billion total points for true smoothness
 BURN_IN = 50               # Number of initial iterations to skip (letting the math settle)
 GAMMA = 2.2                # Gamma correction for final image
 BRIGHTNESS = 2.0           # Global brightness multiplier
+VIBRANCE = 1.4             # Saturation boost for dense areas
+BLOOM_INTENSITY = 0.4      # How much the bright areas glow (0.0 to 1.0)
+NOISE_FALLOFF = 1.5        # NEW: Exponential curve to smoothly fade out stray grain
 
 # Data structure mapping to hold our Affine Transforms and Variation weights in VRAM
 # Taichi structs ensure memory alignment on the GPU
@@ -208,19 +211,34 @@ def apply_tone_mapping_kernel():
     
     for i, j in accumulator:
         dens = accumulator[i, j][3]
-        if dens > 0.0:
+        # Ignore empty space and single rogue hits
+        if dens > 1.0:
             # 1. Calculate Logarithmic alpha/exposure
             alpha = ti.math.log(dens) / log_max
+            
+            # NEW: Soft Noise Gate. By raising the fraction to a power, 
+            # low-density grain drops to black smoothly without a harsh, jagged edge.
+            alpha = ti.math.pow(alpha, NOISE_FALLOFF)
             
             # 2. Extract base color averages
             r = accumulator[i, j][0] / dens
             g = accumulator[i, j][1] / dens
             b = accumulator[i, j][2] / dens
             
-            # 3. Apply Brightness, Alpha, and Gamma Correction
-            final_r = ti.math.pow(r * alpha * BRIGHTNESS, 1.0 / GAMMA)
-            final_g = ti.math.pow(g * alpha * BRIGHTNESS, 1.0 / GAMMA)
-            final_b = ti.math.pow(b * alpha * BRIGHTNESS, 1.0 / GAMMA)
+            # 3. HDR Vibrance (Boost saturation before gamma clamping)
+            # Calculate perceived luminance (brightness) of the color
+            luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            
+            # Push the colors away from grayscale to increase purity
+            r = luminance + (r - luminance) * VIBRANCE
+            g = luminance + (g - luminance) * VIBRANCE
+            b = luminance + (b - luminance) * VIBRANCE
+            
+            # 4. Apply Brightness, Alpha, and Gamma Correction
+            # ti.math.max is used to prevent negative bases in the pow() function from the vibrance math
+            final_r = ti.math.pow(ti.math.max(r * alpha * BRIGHTNESS, 0.0), 1.0 / GAMMA)
+            final_g = ti.math.pow(ti.math.max(g * alpha * BRIGHTNESS, 0.0), 1.0 / GAMMA)
+            final_b = ti.math.pow(ti.math.max(b * alpha * BRIGHTNESS, 0.0), 1.0 / GAMMA)
             
             # Clamp to safe 0-1 range
             pixels[i, j] = ti.math.clamp(ti.math.vec3(final_r, final_g, final_b), 0.0, 1.0)
@@ -373,6 +391,22 @@ class ApophysisRenderer:
             print(f"Downscaling from {WIDTH}x{HEIGHT} to {FINAL_WIDTH}x{FINAL_HEIGHT} for Anti-Aliasing...")
             img = img.resize((FINAL_WIDTH, FINAL_HEIGHT), Image.Resampling.LANCZOS)
             
+        # --- Cinematic Post-Processing Pipeline ---
+        print("Applying Cinematic Post-Processing (Bloom & Color Grade)...")
+        
+        # 1. Optical Bloom (Glow)
+        # Blur a copy of the image based on screen width (1.5% radius)
+        blur_radius = FINAL_WIDTH * 0.015
+        blurred_img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        # Screen blend the glowing blur over the original image
+        screened_img = ImageChops.screen(img, blurred_img)
+        # Blend original with screened version based on user intensity
+        img = Image.blend(img, screened_img, BLOOM_INTENSITY)
+        
+        # 2. Final Color Grading (Contrast and Saturation Pop)
+        img = ImageEnhance.Contrast(img).enhance(1.15) # Darken shadows slightly
+        img = ImageEnhance.Color(img).enhance(1.1)   # Give final RGB values a slight punch
+        
         img.save(output_path)
         print(f"Success! Fractal saved to {output_path}")
 
