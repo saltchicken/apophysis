@@ -6,6 +6,7 @@ import taichi as ti
 # Import the refactored renderer logic
 from .renderer import ApophysisRenderer
 
+
 def generate_sample_flame(filepath):
     xml_content = """<flames>
 <flame name="Cosmic_Flower" version="Apophysis 7x" size="1920 1080" center="0 0" scale="250">
@@ -26,20 +27,54 @@ def generate_sample_flame(filepath):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="GPU-Accelerated Apophysis Flame Renderer")
-    parser.add_argument("-i", "--input", type=str, default="sample_fractal.flame", help="Path to .flame file")
-    parser.add_argument("-o", "--output", type=str, default="render_output.png", help="Output image path")
-    
+    parser = argparse.ArgumentParser(
+        description="GPU-Accelerated Apophysis Flame Renderer"
+    )
+    parser.add_argument(
+        "-i",
+        "--input",
+        type=str,
+        default="sample_fractal.flame",
+        help="Path to .flame file",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        default="render_output.png",
+        help="Output image path",
+    )
+
     # Exposing parameters dynamically to the user
-    parser.add_argument("-W", "--width", type=int, default=1920, help="Final output width")
-    parser.add_argument("-H", "--height", type=int, default=1080, help="Final output height")
-    parser.add_argument("--oversample", type=int, default=2, help="SSAA multiplier (e.g. 2 means 4K down to 1080p)")
-    parser.add_argument("-z", "--zoom", type=float, default=1.0, help="Camera zoom multiplier")
-    
+    parser.add_argument(
+        "-W", "--width", type=int, default=1920, help="Final output width"
+    )
+    parser.add_argument(
+        "-H", "--height", type=int, default=1080, help="Final output height"
+    )
+    parser.add_argument(
+        "--oversample",
+        type=int,
+        default=2,
+        help="SSAA multiplier (e.g. 2 means 4K down to 1080p)",
+    )
+    parser.add_argument(
+        "-z", "--zoom", type=float, default=1.0, help="Camera zoom multiplier"
+    )
+
     # Quality & Performance flags
-    parser.add_argument("--threads", type=int, default=200_000, help="Number of parallel GPU threads")
-    parser.add_argument("--iterations", type=int, default=50_000, help="Total iterations per thread")
-    parser.add_argument("--batch-size", type=int, default=5_000, help="Iterations per GPU execution to prevent crashing")
+    parser.add_argument(
+        "--threads", type=int, default=200_000, help="Number of parallel GPU threads"
+    )
+    parser.add_argument(
+        "--iterations", type=int, default=50_000, help="Total iterations per thread"
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=5_000,
+        help="Iterations per GPU execution to prevent crashing",
+    )
 
     args = parser.parse_args()
 
@@ -60,15 +95,16 @@ def main():
             oversample=args.oversample,
             num_threads=args.threads,
             iterations=args.iterations,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
         )
-        
+
         # Load File and Render
         renderer.load_flame(args.input, zoom_multiplier=args.zoom)
         renderer.render_to_image(args.output)
-        
+
     except Exception as e:
         print(f"Error rendering fractal: {e}")
+
 
 if __name__ == "__main__":
     main()

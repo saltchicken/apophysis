@@ -7,17 +7,45 @@ from PIL import Image, ImageFilter, ImageEnhance, ImageChops
 
 # Data structure mapping to hold our Affine Transforms and Variation weights in VRAM
 XFormStruct = ti.types.struct(
-    a=ti.f32, b=ti.f32, c=ti.f32, d=ti.f32, e=ti.f32, f=ti.f32,
-    weight=ti.f32, color_idx=ti.f32,
-    v_linear=ti.f32, v_sinusoidal=ti.f32, v_spherical=ti.f32, v_swirl=ti.f32,
-    v_horseshoe=ti.f32, v_polar=ti.f32, v_handkerchief=ti.f32, v_heart=ti.f32,
-    v_disc=ti.f32, v_spiral=ti.f32, v_hyperbolic=ti.f32, v_diamond=ti.f32,
-    v_ex=ti.f32, v_julia=ti.f32, v_bent=ti.f32, v_waves=ti.f32,
-    v_fisheye=ti.f32, v_popcorn=ti.f32, v_exponential=ti.f32, v_power=ti.f32,
-    v_cosine=ti.f32, v_rings=ti.f32, v_fan=ti.f32, v_eyefish=ti.f32,
-    v_bubble=ti.f32, v_cylinder=ti.f32, v_noise=ti.f32, v_blur=ti.f32,
+    a=ti.f32,
+    b=ti.f32,
+    c=ti.f32,
+    d=ti.f32,
+    e=ti.f32,
+    f=ti.f32,
+    weight=ti.f32,
+    color_idx=ti.f32,
+    v_linear=ti.f32,
+    v_sinusoidal=ti.f32,
+    v_spherical=ti.f32,
+    v_swirl=ti.f32,
+    v_horseshoe=ti.f32,
+    v_polar=ti.f32,
+    v_handkerchief=ti.f32,
+    v_heart=ti.f32,
+    v_disc=ti.f32,
+    v_spiral=ti.f32,
+    v_hyperbolic=ti.f32,
+    v_diamond=ti.f32,
+    v_ex=ti.f32,
+    v_julia=ti.f32,
+    v_bent=ti.f32,
+    v_waves=ti.f32,
+    v_fisheye=ti.f32,
+    v_popcorn=ti.f32,
+    v_exponential=ti.f32,
+    v_power=ti.f32,
+    v_cosine=ti.f32,
+    v_rings=ti.f32,
+    v_fan=ti.f32,
+    v_eyefish=ti.f32,
+    v_bubble=ti.f32,
+    v_cylinder=ti.f32,
+    v_noise=ti.f32,
+    v_blur=ti.f32,
     v_gaussian_blur=ti.f32,
 )
+
 
 @ti.data_oriented
 class ApophysisRenderer:
@@ -41,12 +69,12 @@ class ApophysisRenderer:
         self.oversample = oversample
         self.width = final_width * oversample
         self.height = final_height * oversample
-        
+
         self.num_threads = num_threads
         self.iterations = iterations
         self.batch_size = batch_size
         self.burn_in = 50
-        
+
         # Rendering Params
         self.gamma = gamma
         self.brightness = brightness
@@ -54,11 +82,11 @@ class ApophysisRenderer:
         self.bloom_intensity = bloom_intensity
         self.min_density = min_density
         self.noise_falloff = noise_falloff
-        
+
         self.filter_radius = 1
         self.filter_weight_center = 1.0
         self.filter_weight_edge = 0.5
-        
+
         # Camera & Data
         self.camera = {"scale": 100.0, "x": 0.0, "y": 0.0}
         self.xforms_data = []
@@ -66,18 +94,44 @@ class ApophysisRenderer:
         self.num_xfs = 0
 
         self.supported_vars = [
-            "linear", "sinusoidal", "spherical", "swirl", "horseshoe", "polar",
-            "handkerchief", "heart", "disc", "spiral", "hyperbolic", "diamond",
-            "ex", "julia", "bent", "waves", "fisheye", "popcorn", "exponential",
-            "power", "cosine", "rings", "fan", "eyefish", "bubble", "cylinder",
-            "noise", "blur", "gaussian_blur",
+            "linear",
+            "sinusoidal",
+            "spherical",
+            "swirl",
+            "horseshoe",
+            "polar",
+            "handkerchief",
+            "heart",
+            "disc",
+            "spiral",
+            "hyperbolic",
+            "diamond",
+            "ex",
+            "julia",
+            "bent",
+            "waves",
+            "fisheye",
+            "popcorn",
+            "exponential",
+            "power",
+            "cosine",
+            "rings",
+            "fan",
+            "eyefish",
+            "bubble",
+            "cylinder",
+            "noise",
+            "blur",
+            "gaussian_blur",
         ]
 
         # Dynamically allocate Taichi fields based on chosen resolution
-        self.accumulator = ti.Vector.field(4, dtype=ti.f32, shape=(self.width, self.height))
+        self.accumulator = ti.Vector.field(
+            4, dtype=ti.f32, shape=(self.width, self.height)
+        )
         self.pixels = ti.Vector.field(3, dtype=ti.f32, shape=(self.width, self.height))
         self.max_density = ti.field(dtype=ti.f32, shape=())
-        
+
         # We will allocate these after parsing the flame
         self.d_xforms = None
         self.d_palette = ti.Vector.field(3, dtype=ti.f32, shape=(256,))
@@ -86,13 +140,19 @@ class ApophysisRenderer:
         print(f"Parsing {flame_path}...")
         tree = ET.parse(flame_path)
         root = tree.getroot()
-        flame = root.find("flame") if root.find("flame") is not None else (root if root.tag == "flame" else None)
+        flame = (
+            root.find("flame")
+            if root.find("flame") is not None
+            else (root if root.tag == "flame" else None)
+        )
 
         if flame is None:
             raise ValueError("Invalid .flame file format.")
 
         if "scale" in flame.attrib:
-            self.camera["scale"] = float(flame.attrib["scale"]) * self.oversample * zoom_multiplier
+            self.camera["scale"] = (
+                float(flame.attrib["scale"]) * self.oversample * zoom_multiplier
+            )
         if "center" in flame.attrib:
             cx, cy = map(float, flame.attrib["center"].split())
             self.camera["x"] = cx
@@ -105,11 +165,13 @@ class ApophysisRenderer:
             for i in range(256):
                 if i * 6 + 6 <= len(text):
                     hex_str = text[i * 6 : i * 6 + 6]
-                    self.palette_data.append((
-                        int(hex_str[0:2], 16) / 255.0,
-                        int(hex_str[2:4], 16) / 255.0,
-                        int(hex_str[4:6], 16) / 255.0
-                    ))
+                    self.palette_data.append(
+                        (
+                            int(hex_str[0:2], 16) / 255.0,
+                            int(hex_str[2:4], 16) / 255.0,
+                            int(hex_str[4:6], 16) / 255.0,
+                        )
+                    )
 
         if len(self.palette_data) < 256:
             self.palette_data = [(i / 255.0, (i / 255.0) ** 2, 0.0) for i in range(256)]
@@ -120,7 +182,9 @@ class ApophysisRenderer:
         # Parse Transforms
         total_weight = 0.0
         for xform_tag in flame.findall("xform"):
-            coefs = list(map(float, xform_tag.attrib.get("coefs", "1 0 0 1 0 0").split()))
+            coefs = list(
+                map(float, xform_tag.attrib.get("coefs", "1 0 0 1 0 0").split())
+            )
             weight = float(xform_tag.attrib.get("weight", 1.0))
             color_idx = float(xform_tag.attrib.get("color", 0.0))
             total_weight += weight
@@ -135,7 +199,14 @@ class ApophysisRenderer:
 
         for i, xf in enumerate(self.xforms_data):
             xf["weight"] /= total_weight
-            self.d_xforms[i].a, self.d_xforms[i].b, self.d_xforms[i].c, self.d_xforms[i].d, self.d_xforms[i].e, self.d_xforms[i].f = xf["coefs"]
+            (
+                self.d_xforms[i].a,
+                self.d_xforms[i].b,
+                self.d_xforms[i].c,
+                self.d_xforms[i].d,
+                self.d_xforms[i].e,
+                self.d_xforms[i].f,
+            ) = xf["coefs"]
             self.d_xforms[i].weight = xf["weight"]
             self.d_xforms[i].color_idx = xf["color_idx"]
             for v in self.supported_vars:
@@ -164,7 +235,7 @@ class ApophysisRenderer:
                 xf = self.d_xforms[chosen_idx]
                 nx = xf.a * x + xf.c * y + xf.e
                 ny = xf.b * x + xf.d * y + xf.f
-                
+
                 final_x = 0.0
                 final_y = 0.0
                 r2 = nx * nx + ny * ny
@@ -201,12 +272,20 @@ class ApophysisRenderer:
                     final_x += xf.v_heart * r * ti.math.sin(theta * r)
                     final_y += xf.v_heart * -r * ti.math.cos(theta * r)
                 if xf.v_disc > 0.0:
-                    final_x += xf.v_disc * (theta / ti.math.pi) * ti.math.sin(ti.math.pi * r)
-                    final_y += xf.v_disc * (theta / ti.math.pi) * ti.math.cos(ti.math.pi * r)
+                    final_x += (
+                        xf.v_disc * (theta / ti.math.pi) * ti.math.sin(ti.math.pi * r)
+                    )
+                    final_y += (
+                        xf.v_disc * (theta / ti.math.pi) * ti.math.cos(ti.math.pi * r)
+                    )
                 if xf.v_spiral > 0.0:
                     r_safe = ti.math.max(r, 1e-10)
-                    final_x += xf.v_spiral * (ti.math.cos(theta) + ti.math.sin(r)) / r_safe
-                    final_y += xf.v_spiral * (ti.math.sin(theta) - ti.math.cos(r)) / r_safe
+                    final_x += (
+                        xf.v_spiral * (ti.math.cos(theta) + ti.math.sin(r)) / r_safe
+                    )
+                    final_y += (
+                        xf.v_spiral * (ti.math.sin(theta) - ti.math.cos(r)) / r_safe
+                    )
                 if xf.v_hyperbolic > 0.0:
                     r_safe = ti.math.max(r, 1e-10)
                     final_x += xf.v_hyperbolic * ti.math.sin(theta) / r_safe
@@ -239,15 +318,23 @@ class ApophysisRenderer:
                     final_x += xf.v_bent * bent_x
                     final_y += xf.v_bent * bent_y
                 if xf.v_waves > 0.0:
-                    final_x += xf.v_waves * (nx + xf.b * ti.math.sin(ny / (xf.c * xf.c + 1e-10)))
-                    final_y += xf.v_waves * (ny + xf.e * ti.math.sin(nx / (xf.f * xf.f + 1e-10)))
+                    final_x += xf.v_waves * (
+                        nx + xf.b * ti.math.sin(ny / (xf.c * xf.c + 1e-10))
+                    )
+                    final_y += xf.v_waves * (
+                        ny + xf.e * ti.math.sin(nx / (xf.f * xf.f + 1e-10))
+                    )
                 if xf.v_fisheye > 0.0:
                     r_fisheye = 2.0 / (r + 1.0)
                     final_x += xf.v_fisheye * r_fisheye * ny
                     final_y += xf.v_fisheye * r_fisheye * nx
                 if xf.v_popcorn > 0.0:
-                    final_x += xf.v_popcorn * (nx + xf.c * ti.math.sin(ti.math.tan(3.0 * ny)))
-                    final_y += xf.v_popcorn * (ny + xf.f * ti.math.sin(ti.math.tan(3.0 * nx)))
+                    final_x += xf.v_popcorn * (
+                        nx + xf.c * ti.math.sin(ti.math.tan(3.0 * ny))
+                    )
+                    final_y += xf.v_popcorn * (
+                        ny + xf.f * ti.math.sin(ti.math.tan(3.0 * nx))
+                    )
                 if xf.v_exponential > 0.0:
                     exp_nx = ti.math.exp(nx - 1.0)
                     final_x += xf.v_exponential * exp_nx * ti.math.cos(ti.math.pi * ny)
@@ -303,8 +390,12 @@ class ApophysisRenderer:
                 if xf.v_gaussian_blur > 0.0:
                     u1 = ti.math.max(ti.random(ti.f32), 1e-10)
                     u2 = ti.random(ti.f32)
-                    z0 = ti.math.sqrt(-2.0 * ti.math.log(u1)) * ti.math.cos(2.0 * ti.math.pi * u2)
-                    z1 = ti.math.sqrt(-2.0 * ti.math.log(u1)) * ti.math.sin(2.0 * ti.math.pi * u2)
+                    z0 = ti.math.sqrt(-2.0 * ti.math.log(u1)) * ti.math.cos(
+                        2.0 * ti.math.pi * u2
+                    )
+                    z1 = ti.math.sqrt(-2.0 * ti.math.log(u1)) * ti.math.sin(
+                        2.0 * ti.math.pi * u2
+                    )
                     final_x += xf.v_gaussian_blur * z0
                     final_y += xf.v_gaussian_blur * z1
 
@@ -313,34 +404,61 @@ class ApophysisRenderer:
                 c = (c + xf.color_idx) * 0.5
 
                 if step > self.burn_in:
-                    px_float = (x - self.camera["x"]) * self.camera["scale"] + (self.width / 2.0)
-                    py_float = (y - self.camera["y"]) * self.camera["scale"] + (self.height / 2.0)
+                    px_float = (x - self.camera["x"]) * self.camera["scale"] + (
+                        self.width / 2.0
+                    )
+                    py_float = (y - self.camera["y"]) * self.camera["scale"] + (
+                        self.height / 2.0
+                    )
                     px = ti.cast(px_float, ti.i32)
                     py = ti.cast(py_float, ti.i32)
 
-                    if -self.filter_radius <= px < self.width + self.filter_radius and \
-                       -self.filter_radius <= py < self.height + self.filter_radius:
-                        
+                    if (
+                        -self.filter_radius <= px < self.width + self.filter_radius
+                        and -self.filter_radius <= py < self.height + self.filter_radius
+                    ):
+
                         pal_idx = ti.math.clamp(ti.cast(c * 255.0, ti.i32), 0, 255)
                         color = self.d_palette[pal_idx]
 
                         for dx in range(-self.filter_radius, self.filter_radius + 1):
-                            for dy in range(-self.filter_radius, self.filter_radius + 1):
+                            for dy in range(
+                                -self.filter_radius, self.filter_radius + 1
+                            ):
                                 splat_x = px + dx
                                 splat_y = py + dy
-                                if 0 <= splat_x < self.width and 0 <= splat_y < self.height:
+                                if (
+                                    0 <= splat_x < self.width
+                                    and 0 <= splat_y < self.height
+                                ):
                                     dist2 = dx * dx + dy * dy
                                     weight = 0.0
                                     if dist2 == 0:
                                         weight = self.filter_weight_center
-                                    elif dist2 <= self.filter_radius * self.filter_radius:
-                                        weight = self.filter_weight_edge / ti.math.sqrt(float(dist2))
+                                    elif (
+                                        dist2 <= self.filter_radius * self.filter_radius
+                                    ):
+                                        weight = self.filter_weight_edge / ti.math.sqrt(
+                                            float(dist2)
+                                        )
 
                                     if weight > 0.0:
-                                        ti.atomic_add(self.accumulator[splat_x, splat_y][0], color[0] * weight)
-                                        ti.atomic_add(self.accumulator[splat_x, splat_y][1], color[1] * weight)
-                                        ti.atomic_add(self.accumulator[splat_x, splat_y][2], color[2] * weight)
-                                        ti.atomic_add(self.accumulator[splat_x, splat_y][3], weight)
+                                        ti.atomic_add(
+                                            self.accumulator[splat_x, splat_y][0],
+                                            color[0] * weight,
+                                        )
+                                        ti.atomic_add(
+                                            self.accumulator[splat_x, splat_y][1],
+                                            color[1] * weight,
+                                        )
+                                        ti.atomic_add(
+                                            self.accumulator[splat_x, splat_y][2],
+                                            color[2] * weight,
+                                        )
+                                        ti.atomic_add(
+                                            self.accumulator[splat_x, splat_y][3],
+                                            weight,
+                                        )
 
     @ti.kernel
     def _find_max_density_kernel(self):
@@ -370,31 +488,41 @@ class ApophysisRenderer:
                 g = luminance + (g - luminance) * self.vibrance
                 b = luminance + (b - luminance) * self.vibrance
 
-                final_r = ti.math.pow(ti.math.max(r * alpha * self.brightness, 0.0), 1.0 / self.gamma)
-                final_g = ti.math.pow(ti.math.max(g * alpha * self.brightness, 0.0), 1.0 / self.gamma)
-                final_b = ti.math.pow(ti.math.max(b * alpha * self.brightness, 0.0), 1.0 / self.gamma)
+                final_r = ti.math.pow(
+                    ti.math.max(r * alpha * self.brightness, 0.0), 1.0 / self.gamma
+                )
+                final_g = ti.math.pow(
+                    ti.math.max(g * alpha * self.brightness, 0.0), 1.0 / self.gamma
+                )
+                final_b = ti.math.pow(
+                    ti.math.max(b * alpha * self.brightness, 0.0), 1.0 / self.gamma
+                )
 
-                self.pixels[i, j] = ti.math.clamp(ti.math.vec3(final_r, final_g, final_b), 0.0, 1.0)
+                self.pixels[i, j] = ti.math.clamp(
+                    ti.math.vec3(final_r, final_g, final_b), 0.0, 1.0
+                )
             else:
                 self.pixels[i, j] = ti.math.vec3(0.0, 0.0, 0.0)
 
     def render_to_image(self, output_path):
         self.accumulator.fill(0)
-        
+
         # Batching logic to prevent OS GPU driver timeout (TDR)
         num_batches = max(1, self.iterations // self.batch_size)
         total_iters = num_batches * self.batch_size
-        
-        print(f"Executing Compute Shader: {self.num_threads} threads * {total_iters} iterations.")
+
+        print(
+            f"Executing Compute Shader: {self.num_threads} threads * {total_iters} iterations."
+        )
         print(f"Running in {num_batches} batches to maintain GPU stability...")
-        
+
         start_time = time.time()
         for batch in range(num_batches):
             self._render_batch_kernel(self.batch_size)
             ti.sync()
             if num_batches > 1 and (batch + 1) % (max(1, num_batches // 10)) == 0:
                 print(f"  Progress: {(batch + 1) / num_batches * 100:.0f}%")
-                
+
         print(f"Compute finished in {time.time() - start_time:.2f} seconds.")
 
         print("Applying Log-Density Tone Mapping...")
@@ -408,8 +536,12 @@ class ApophysisRenderer:
         img = Image.fromarray(img_uint8, "RGB")
 
         if self.oversample > 1:
-            print(f"Downscaling to {self.final_width}x{self.final_height} for Anti-Aliasing...")
-            img = img.resize((self.final_width, self.final_height), Image.Resampling.LANCZOS)
+            print(
+                f"Downscaling to {self.final_width}x{self.final_height} for Anti-Aliasing..."
+            )
+            img = img.resize(
+                (self.final_width, self.final_height), Image.Resampling.LANCZOS
+            )
 
         print("Applying Median Filter & Cinematic Post-Processing...")
         img = img.filter(ImageFilter.MedianFilter(size=3))
@@ -417,7 +549,7 @@ class ApophysisRenderer:
         blurred_img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
         screened_img = ImageChops.screen(img, blurred_img)
         img = Image.blend(img, screened_img, self.bloom_intensity)
-        
+
         img = ImageEnhance.Contrast(img).enhance(1.15)
         img = ImageEnhance.Color(img).enhance(1.1)
 
