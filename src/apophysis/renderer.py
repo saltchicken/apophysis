@@ -215,7 +215,7 @@ class ApophysisRenderer:
         print(f"Parsed {self.num_xfs} transforms successfully.")
 
     @ti.kernel
-    def _render_batch_kernel(self, batch_iters: ti.i32):
+    def _render_batch_kernel(self, batch_iters: ti.i32, cam_x: ti.f32, cam_y: ti.f32, cam_scale: ti.f32, cam_angle: ti.f32):
         for _ in range(self.num_threads):
             x = ti.random(ti.f32) * 2.0 - 1.0
             y = ti.random(ti.f32) * 2.0 - 1.0
@@ -404,12 +404,15 @@ class ApophysisRenderer:
                 c = (c + xf.color_idx) * 0.5
 
                 if step > self.burn_in:
-                    px_float = (x - self.camera["x"]) * self.camera["scale"] + (
-                        self.width / 2.0
-                    )
-                    py_float = (y - self.camera["y"]) * self.camera["scale"] + (
-                        self.height / 2.0
-                    )
+                    cx = x - cam_x
+                    cy = y - cam_y
+                    ca = ti.math.cos(cam_angle)
+                    sa = ti.math.sin(cam_angle)
+                    rx = cx * ca - cy * sa
+                    ry = cx * sa + cy * ca
+
+                    px_float = rx * cam_scale + (self.width / 2.0)
+                    py_float = ry * cam_scale + (self.height / 2.0)
                     px = ti.cast(px_float, ti.i32)
                     py = ti.cast(py_float, ti.i32)
 
@@ -516,9 +519,14 @@ class ApophysisRenderer:
         )
         print(f"Running in {num_batches} batches to maintain GPU stability...")
 
+        cam_x = self.camera.get("x", 0.0)
+        cam_y = self.camera.get("y", 0.0)
+        cam_scale = self.camera.get("scale", 100.0)
+        cam_angle = self.camera.get("angle", 0.0)
+
         start_time = time.time()
         for batch in range(num_batches):
-            self._render_batch_kernel(self.batch_size)
+            self._render_batch_kernel(self.batch_size, cam_x, cam_y, cam_scale, cam_angle)
             ti.sync()
             if num_batches > 1 and (batch + 1) % (max(1, num_batches // 10)) == 0:
                 print(f"  Progress: {(batch + 1) / num_batches * 100:.0f}%")

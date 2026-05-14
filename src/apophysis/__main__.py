@@ -75,6 +75,24 @@ def main():
         default=5_000,
         help="Iterations per GPU execution to prevent crashing",
     )
+    parser.add_argument(
+        "--frames",
+        type=int,
+        default=1,
+        help="Number of frames to render for an animation sequence",
+    )
+    parser.add_argument(
+        "--rot-speed",
+        type=float,
+        default=0.01,
+        help="Camera rotation speed per frame in radians",
+    )
+    parser.add_argument(
+        "--zoom-speed",
+        type=float,
+        default=1.0,
+        help="Camera zoom multiplier per frame",
+    )
 
     args = parser.parse_args()
 
@@ -100,7 +118,20 @@ def main():
 
         # Load File and Render
         renderer.load_flame(args.input, zoom_multiplier=args.zoom)
-        renderer.render_to_image(args.output)
+
+        if args.frames <= 1:
+            renderer.render_to_image(args.output)
+        else:
+            base_name, ext = os.path.splitext(args.output)
+            for f in range(args.frames):
+                frame_output = f"{base_name}_{f:04d}{ext}"
+                print(f"--- Rendering frame {f+1}/{args.frames} -> {frame_output} ---")
+                
+                renderer.render_to_image(frame_output)
+                
+                # Apply per-frame animation changes
+                renderer.camera["angle"] = renderer.camera.get("angle", 0.0) + args.rot_speed
+                renderer.camera["scale"] = renderer.camera.get("scale", 100.0) * args.zoom_speed
 
     except Exception as e:
         print(f"Error rendering fractal: {e}")
